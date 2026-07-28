@@ -1,15 +1,4 @@
 apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: mysql-pvc
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 256Mi
-root@ip-172-31-0-9:/two-tier-app/k8s# cat mysql-svc.yml
-apiVersion: v1
 kind: Service
 metadata:
   name: mysql-svc
