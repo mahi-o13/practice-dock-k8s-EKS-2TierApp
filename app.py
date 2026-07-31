@@ -48,5 +48,16 @@ def submit():
     return jsonify({'message': new_message})
 
 if __name__ == '__main__':
-    init_db()
+    
+    while True:
+        try:
+            init_db()
+            print("Database connected successfully")
+            break
+
+        except Exception as e:
+            print(f"MySQL not ready: {e}")
+            print("Retrying in 5 seconds...")
+            time.sleep(5)
+
     app.run(host='0.0.0.0', port=5000, debug=True)
