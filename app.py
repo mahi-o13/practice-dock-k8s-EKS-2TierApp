@@ -25,6 +25,11 @@ def init_db():
         mysql.connection.commit()
         cur.close()
 
+# Health endpoint for Kubernetes probes
+@app.route('/health')
+def health():
+    return "OK", 200
+
 @app.route('/')
 def hello():
     cur = mysql.connection.cursor()
