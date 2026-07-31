@@ -25,16 +25,28 @@ spec:
 
           env:
             - name: MYSQL_HOST
-              value: "mysql-svc"
-
-            - name: MYSQL_PASSWORD
-              value: "admin"
-
-            - name: MYSQL_USER
-              value: "root"
+              valueFrom:
+                configMapKeyRef:
+                  name: mysql-config
+                  key: MYSQL_HOST
 
             - name: MYSQL_DB
-              value: "mydb"
+              valueFrom:
+                configMapKeyRef:
+                  name: mysql-config
+                  key: MYSQL_DB
+
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_USER
+
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD                
 
           ports:
             - containerPort: 5000

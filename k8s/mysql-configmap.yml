@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+
+metadata:
+  name: mysql-config
+
+data:
+  MYSQL_HOST: mysql-svc
+  MYSQL_DB: mydb
+  MYSQL_DATABASE: mydb
