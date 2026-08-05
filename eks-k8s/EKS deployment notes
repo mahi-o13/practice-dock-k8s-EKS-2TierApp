@@ -1,0 +1,1751 @@
+Today's Complete Journey: Kubernetes to Amazon EKS Production-Style Deployment
+
+Objective:
+The objective of today's activity was to move from a local Kubernetes learning setup to a real Amazon EKS deployment and understand how production-style Kubernetes components work together. We deployed a two-tier Flask + MySQL application on Amazon EKS using Kubernetes YAML manifests, persistent EBS storage, AWS Load Balancer Controller, ALB Ingress, HPA, ConfigMaps, Secrets, and supporting AWS IAM permissions.
+
+====================================================================
+1. Existing Application Overview
+====================================================================
+
+Application Type:
+Two-tier application
+
+Components:
+1. Flask web application
+2. MySQL database
+
+Container Image:
+maheshshillare/two-tier-flask-app:latest
+
+Application Port:
+5000
+
+Database:
+MySQL
+
+Database Name:
+mydb
+
+Database Service:
+mysql-svc
+
+Application Service:
+two-tier-app-svc
+
+High-Level Application Flow:
+
+Browser
+↓
+Flask Application
+↓
+MySQL Service
+↓
+MySQL Pod
+↓
+Persistent Storage
+
+====================================================================
+2. Previous Kubernetes Foundation Covered Before EKS
+====================================================================
+
+Before starting EKS today, the following Kubernetes concepts were already practiced on K3s:
+
+1. Pods
+2. Deployments
+3. ReplicaSets
+4. Services
+5. ClusterIP
+6. NodePort
+7. Ingress using Traefik
+8. PersistentVolume
+9. PersistentVolumeClaim
+10. ConfigMap
+11. Secret
+12. Readiness Probe
+13. Liveness Probe
+14. Retry logic in application startup
+15. Rolling Updates
+16. Rollbacks
+17. Resource Requests
+18. Resource Limits
+19. Metrics Server
+20. Horizontal Pod Autoscaler
+
+This foundation helped in understanding the same concepts on Amazon EKS.
+
+====================================================================
+3. AWS CLI and eksctl Setup
+====================================================================
+
+Purpose:
+AWS CLI and eksctl were installed on the EC2 instance to create and manage the Amazon EKS cluster.
+
+Installation script used:
+
+#!/bin/bash
+
+set -e
+
+echo "Installing eksctl"
+
+curl --silent --location \
+"https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" \
+| tar xz -C /tmp
+
+mv /tmp/eksctl /usr/local/bin
+
+echo "Installing AWS CLI v2"
+
+apt update -y
+apt install -y unzip curl
+
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+-o "awscliv2.zip"
+
+unzip -o awscliv2.zip
+
+./aws/install --update
+
+echo "Verification"
+
+aws --version
+eksctl version
+
+Validation commands:
+
+aws --version
+
+eksctl version
+
+aws sts get-caller-identity
+
+====================================================================
+4. IAM Role for EC2 to Access AWS and EKS
+====================================================================
+
+Instead of configuring AWS access keys manually, an IAM role was attached to the EC2 instance.
+
+IAM Role Name:
+EKS-Admin-Role
+
+Purpose:
+Allow the EC2 instance to call AWS APIs required for EKS administration.
+
+Architecture:
+
+EC2 Instance
+↓
+IAM Role
+↓
+Temporary AWS Credentials
+↓
+AWS CLI
+↓
+eksctl
+↓
+EKS APIs
+
+Initial policies attached:
+
+AmazonEKSClusterPolicy
+AmazonEKSServicePolicy
+AmazonEC2FullAccess
+IAMFullAccess
+AWSCloudFormationFullAccess
+
+Validation:
+
+aws sts get-caller-identity
+
+Successful output showed:
+
+arn:aws:sts::617292774228:assumed-role/EKS-Admin-Role/i-0481419d2f6ae28b4
+
+This confirmed:
+1. IAM Role was attached successfully
+2. EC2 was able to assume the role
+3. AWS CLI was authenticated
+4. eksctl could use AWS credentials
+
+====================================================================
+5. EKS API Permission Issue and Fix
+====================================================================
+
+While creating the EKS cluster, the following error occurred:
+
+AccessDeniedException:
+User is not authorized to perform:
+eks:DescribeClusterVersions
+
+Additional command also failed:
+
+aws eks list-clusters
+
+Root Cause:
+The EC2 IAM role was authenticated, but did not have enough EKS API permissions.
+
+Fix:
+Created a customer-managed IAM policy with EKS full access.
+
+Policy:
+
+{
+"Version": "2012-10-17",
+"Statement": [
+{
+"Effect": "Allow",
+"Action": [
+"eks:*"
+],
+"Resource": "*"
+}
+]
+}
+
+Attached this policy to:
+
+EKS-Admin-Role
+
+Validation after fix:
+
+aws eks describe-cluster-versions
+
+This command started working after the custom EKS policy was attached.
+
+Learning:
+AWS authentication and AWS authorization are different.
+
+Authentication:
+aws sts get-caller-identity works
+
+Authorization:
+Specific AWS API permissions are still required.
+
+====================================================================
+6. Amazon EKS Cluster Creation
+====================================================================
+
+EKS cluster was created using eksctl.
+
+Command:
+
+eksctl create cluster \
+--name demo-eks \
+--region ap-southeast-2 \
+--version 1.36 \
+--nodegroup-name worker-nodes \
+--node-type t3.medium \
+--nodes 2
+
+Cluster Name:
+demo-eks
+
+Region:
+ap-southeast-2
+
+Kubernetes Version:
+1.36
+
+Node Group:
+worker-nodes
+
+Node Type:
+t3.medium
+
+Number of Worker Nodes:
+2
+
+Validation:
+
+eksctl get cluster --region ap-southeast-2
+
+Output confirmed:
+
+demo-eks ap-southeast-2 True
+
+====================================================================
+7. Kubeconfig Issue and Resolution
+====================================================================
+
+After cluster creation, kubectl was still pointing to the local K3s cluster.
+
+Command:
+
+kubectl get nodes
+
+Output showed:
+
+v1.36.2+k3s1
+
+This confirmed kubectl was still connected to K3s, not EKS.
+
+Fix:
+
+aws eks update-kubeconfig \
+--region ap-southeast-2 \
+--name demo-eks
+
+Then set kubeconfig explicitly:
+
+export KUBECONFIG=$HOME/.kube/config
+
+Validation:
+
+kubectl config current-context
+
+Output:
+
+arn:aws:eks:ap-southeast-2:617292774228:cluster/demo-eks
+
+Then:
+
+kubectl get nodes
+
+Output showed EKS worker nodes:
+
+ip-192-168-52-217.ap-southeast-2.compute.internal
+ip-192-168-85-6.ap-southeast-2.compute.internal
+
+Kubernetes version:
+
+v1.36.2-eks-254016e
+
+This confirmed kubectl was connected to Amazon EKS.
+
+====================================================================
+8. EKS Console Unauthorized Message
+====================================================================
+
+In the AWS EKS Console, the cluster showed:
+
+Status:
+Active
+
+Kubernetes Version:
+1.36
+
+However, the Resources tab showed:
+
+Unauthorized
+
+Reason:
+The AWS Console UI requires Kubernetes RBAC permissions to view Kubernetes resources.
+
+Important point:
+kubectl access was working correctly from the EC2 instance.
+
+Conclusion:
+This was not a cluster issue. This was related to EKS Console access/RBAC mapping.
+
+====================================================================
+9. StorageClass Verification
+====================================================================
+
+Command:
+
+kubectl get storageclass
+
+Output:
+
+NAME PROVISIONER RECLAIMPOLICY VOLUMEBINDINGMODE
+gp2 kubernetes.io/aws-ebs Delete WaitForFirstConsumer
+
+StorageClass available:
+gp2
+
+Purpose:
+Used for dynamic EBS volume provisioning for MySQL PVC.
+
+====================================================================
+10. Application YAML Files Used for EKS
+====================================================================
+
+The following Kubernetes manifests were used:
+
+mysql-configmap.yml
+mysql-secret.yml
+mysql-pvc.yml
+mysql-deployment.yml
+mysql-svc.yml
+two-tier-app-deployment.yml
+two-tier-app-svc.yml
+two-tier-app-hpa.yml
+two-tier-app-ingress.yml
+
+Manual PV file was not used on EKS.
+
+Reason:
+EKS uses dynamic provisioning with EBS through a StorageClass and PVC.
+
+====================================================================
+11. MySQL PVC for EKS
+====================================================================
+
+PVC file:
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+name: mysql-pvc
+spec:
+accessModes:
+- ReadWriteOnce
+storageClassName: gp2
+resources:
+requests:
+storage: 5Gi
+
+Purpose:
+Request a 5Gi EBS volume dynamically from AWS.
+
+Expected flow:
+
+PVC
+↓
+StorageClass gp2
+↓
+EBS CSI Driver
+↓
+AWS EBS Volume
+↓
+PV automatically created
+↓
+MySQL Pod mounts volume
+
+====================================================================
+12. Initial PVC Issue
+====================================================================
+
+PVC remained in Pending state:
+
+kubectl get pvc
+
+Output:
+
+mysql-pvc Pending gp2
+
+MySQL Pod also stayed Pending.
+
+Flask Pods went into CrashLoopBackOff because MySQL was not available.
+
+Investigation:
+
+kubectl describe pvc mysql-pvc
+
+Output showed:
+
+Waiting for a volume to be created by the external provisioner ebs.csi.aws.com
+
+This indicated EBS volume provisioning was not working.
+
+====================================================================
+13. EBS CSI Driver Issue
+====================================================================
+
+Checked CSI drivers:
+
+kubectl get csidriver
+
+Initially only this existed:
+
+efs.csi.aws.com
+
+Missing:
+
+ebs.csi.aws.com
+
+This confirmed that the EBS CSI driver was not available.
+
+====================================================================
+14. Installed EBS CSI Driver Addon
+====================================================================
+
+Checked existing EKS addons:
+
+aws eks list-addons \
+--cluster-name demo-eks \
+--region ap-southeast-2
+
+Initial addons:
+
+coredns
+kube-proxy
+metrics-server
+vpc-cni
+
+Installed EBS CSI Driver:
+
+eksctl create addon \
+--name aws-ebs-csi-driver \
+--cluster demo-eks \
+--region ap-southeast-2
+
+After installation:
+
+aws eks list-addons \
+--cluster-name demo-eks \
+--region ap-southeast-2
+
+Output included:
+
+aws-ebs-csi-driver
+
+Then:
+
+kubectl get csidriver
+
+Output included:
+
+ebs.csi.aws.com
+
+====================================================================
+15. OIDC Provider Setup
+====================================================================
+
+EBS CSI Driver installation warned that OIDC was not configured.
+
+OIDC was enabled using:
+
+eksctl utils associate-iam-oidc-provider \
+--cluster demo-eks \
+--region ap-southeast-2 \
+--approve
+
+Purpose:
+OIDC allows Kubernetes service accounts to assume IAM roles through IRSA or Pod Identity integrations.
+
+====================================================================
+16. EBS CSI Controller CrashLoopBackOff
+====================================================================
+
+Checked EBS CSI pods:
+
+kubectl get pods -n kube-system | grep ebs
+
+Output:
+
+ebs-csi-controller CrashLoopBackOff
+ebs-csi-node Running
+
+Controller logs:
+
+kubectl logs -n kube-system <ebs-csi-controller-pod> -c ebs-plugin --tail=100
+
+Error:
+
+UnauthorizedOperation:
+User is not authorized to perform:
+ec2:DescribeAvailabilityZones
+
+Role in error:
+
+eksctl-demo-eks-nodegroup-worker-n-NodeInstanceRole-aExYouLwlh43
+
+Root Cause:
+The worker node IAM role did not have sufficient EC2 permissions required by the EBS CSI controller.
+
+====================================================================
+17. Fixed Worker Node IAM Permissions
+====================================================================
+
+Checked worker node role:
+
+aws iam list-roles | grep NodeInstanceRole
+
+Role found:
+
+eksctl-demo-eks-nodegroup-worker-n-NodeInstanceRole-aExYouLwlh43
+
+Checked attached policies:
+
+aws iam list-attached-role-policies \
+--role-name eksctl-demo-eks-nodegroup-worker-n-NodeInstanceRole-aExYouLwlh43
+
+Initially attached policies:
+
+AmazonSSMManagedInstanceCore
+AmazonEKS_CNI_Policy
+AmazonEKSWorkerNodePolicy
+AmazonEC2ContainerRegistryPullOnly
+
+Fix:
+Attached AmazonEC2FullAccess to the worker node IAM role.
+
+After this, EBS CSI controller was able to create EBS volumes.
+
+====================================================================
+18. PVC Bound Successfully
+====================================================================
+
+Command:
+
+kubectl get pvc -w
+
+Output changed from:
+
+Pending
+
+to:
+
+Bound
+
+Final output:
+
+mysql-pvc Bound pvc-bd15c776-a876-41ea-af9f-6cb2df1105be 5Gi RWO gp2
+
+This confirmed:
+
+1. EBS CSI Driver was working
+2. EBS volume was created
+3. PVC was bound
+4. MySQL storage issue was resolved
+
+====================================================================
+19. MySQL Pod Running
+====================================================================
+
+After PVC was bound, MySQL Pod started successfully.
+
+Command:
+
+kubectl get pods -w
+
+Output:
+
+mysql-7fcc69f475-gjqz7 1/1 Running
+
+This confirmed MySQL was now healthy on EKS.
+
+====================================================================
+20. Flask Application Issue
+====================================================================
+
+Flask Pods were initially in CrashLoopBackOff.
+
+Logs:
+
+kubectl logs <two-tier-app-pod>
+
+Error:
+
+NameError: name 'time' is not defined
+
+Reason:
+Retry logic used:
+
+time.sleep(5)
+
+but app.py did not have:
+
+import time
+
+Fix:
+Added this at the top of app.py:
+
+import time
+
+After fixing and redeploying the image, Flask Pods became healthy.
+
+====================================================================
+21. Application Running on EKS
+====================================================================
+
+Final pod status:
+
+mysql 1/1 Running
+two-tier-app 1/1 Running
+two-tier-app 1/1 Running
+
+This confirmed:
+
+1. EBS storage was working
+2. MySQL was running
+3. Flask was running
+4. Flask connected to MySQL through mysql-svc
+5. Application was healthy on EKS
+
+====================================================================
+22. Service Type LoadBalancer
+====================================================================
+
+Initially, the Flask application was exposed using Service type LoadBalancer.
+
+Service output:
+
+kubectl get svc
+
+Output:
+
+two-tier-app-svc LoadBalancer a07d0b8ae80194bf98f6a072bedb11a8-1003160781.ap-southeast-2.elb.amazonaws.com
+
+Architecture:
+
+Internet
+↓
+AWS Load Balancer
+↓
+two-tier-app-svc
+↓
+Flask Pods
+↓
+mysql-svc
+↓
+MySQL Pod
+↓
+EBS Volume
+
+This confirmed AWS automatically created a load balancer for the Kubernetes service.
+
+====================================================================
+23. AWS Load Balancer Controller Setup
+====================================================================
+
+Next step was to move from Service type LoadBalancer to ALB Ingress.
+
+Installed Helm:
+
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+Verified:
+
+helm version
+
+Added EKS Helm repo:
+
+helm repo add eks https://aws.github.io/eks-charts
+
+helm repo update
+
+Installed AWS Load Balancer Controller:
+
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+-n kube-system \
+--set clusterName=demo-eks \
+--set serviceAccount.create=false \
+--set serviceAccount.name=aws-load-balancer-controller \
+--set region=ap-southeast-2 \
+--set vpcId=vpc-0b9843b4ba365bd7a
+
+Verified:
+
+kubectl get deployment -n kube-system aws-load-balancer-controller
+
+Output:
+
+aws-load-balancer-controller 2/2 Running
+
+This confirmed the AWS Load Balancer Controller was installed successfully.
+
+====================================================================
+24. Changed Service Back to ClusterIP
+====================================================================
+
+For ALB Ingress, the service was changed to ClusterIP.
+
+two-tier-app-svc.yml:
+
+apiVersion: v1
+kind: Service
+metadata:
+name: two-tier-app-svc
+spec:
+selector:
+app: two-tier-app
+ports:
+- protocol: TCP
+port: 80
+targetPort: 5000
+type: ClusterIP
+
+Reason:
+With ALB Ingress, the ALB routes traffic to the Ingress, then to the ClusterIP service, then to the pod IPs.
+
+====================================================================
+25. Initial Ingress Error
+====================================================================
+
+Original ingress used:
+
+ingressClassName: traefik
+
+Error:
+
+IngressClass.networking.k8s.io "traefik" not found
+
+Reason:
+Traefik existed only in K3s. EKS uses AWS Load Balancer Controller.
+
+Fix:
+
+ingressClassName: alb
+
+====================================================================
+26. TargetGroup Port Error
+====================================================================
+
+Second error:
+
+TargetGroup port is empty.
+When using Instance targets, your service must be of type NodePort or LoadBalancer.
+
+Reason:
+AWS ALB default target type was instance, but service was ClusterIP.
+
+Fix:
+Added annotation:
+
+alb.ingress.kubernetes.io/target-type: ip
+
+This allows ALB to directly target pod IPs.
+
+====================================================================
+27. Final ALB Ingress YAML
+====================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+name: two-tier-app-ingress
+annotations:
+alb.ingress.kubernetes.io/scheme: internet-facing
+alb.ingress.kubernetes.io/target-type: ip
+spec:
+ingressClassName: alb
+rules:
+- http:
+paths:
+- path: /
+pathType: Prefix
+backend:
+service:
+name: two-tier-app-svc
+port:
+number: 80
+
+Apply:
+
+kubectl apply -f two-tier-app-ingress.yml
+
+====================================================================
+28. ALB Created Successfully
+====================================================================
+
+Command:
+
+kubectl get ingress -w
+
+Output:
+
+two-tier-app-ingress alb k8s-default-twotiera-d05012e3b8-875215614.ap-southeast-2.elb.amazonaws.com
+
+This confirmed AWS ALB was created successfully from the Kubernetes Ingress resource.
+
+====================================================================
+29. Verified ALB from AWS CLI
+====================================================================
+
+Command:
+
+aws elbv2 describe-load-balancers \
+--region ap-southeast-2
+
+Output confirmed:
+
+LoadBalancerName:
+k8s-default-twotiera-d05012e3b8
+
+DNSName:
+k8s-default-twotiera-d05012e3b8-875215614.ap-southeast-2.elb.amazonaws.com
+
+Scheme:
+internet-facing
+
+Type:
+application
+
+State:
+active
+
+This confirmed the ALB was successfully created and active.
+
+====================================================================
+30. Verified Target Group
+====================================================================
+
+Command:
+
+aws elbv2 describe-target-groups \
+--region ap-southeast-2
+
+Output confirmed:
+
+Protocol:
+HTTP
+
+Port:
+5000
+
+TargetType:
+ip
+
+HealthCheckPath:
+/
+
+This proved ALB was targeting pod IPs directly on port 5000.
+
+====================================================================
+31. Verified Target Health
+====================================================================
+
+Command:
+
+aws elbv2 describe-target-health \
+--target-group-arn <target-group-arn>
+
+Output:
+
+192.168.66.90:5000 healthy
+192.168.33.16:5000 healthy
+
+This confirmed both Flask pods were registered as healthy targets behind the ALB.
+
+====================================================================
+32. ALB 404 Issue and Explanation
+====================================================================
+
+When using a host-based ingress rule such as:
+
+two-tier-app.local
+
+and browsing the ALB DNS directly, ALB may return:
+
+HTTP 404
+
+Reason:
+ALB receives this Host header:
+
+k8s-default-twotiera-d05012e3b8-875215614.ap-southeast-2.elb.amazonaws.com
+
+but the Ingress rule expects:
+
+two-tier-app.local
+
+Fix options:
+
+Option 1:
+Remove host from ingress rule so any host header is accepted.
+
+Option 2:
+Use the correct Host header:
+
+curl -H "Host: two-tier-app.local" http://<ALB-DNS>
+
+Option 3:
+Create a Route53 DNS record:
+
+two-tier-app.local
+↓
+ALB DNS
+
+For learning, removing the host rule is simpler.
+
+====================================================================
+33. HPA Testing on EKS
+====================================================================
+
+HPA was tested after deployment.
+
+Load generator pod command:
+
+kubectl run load-generator \
+--image=busybox \
+--restart=Never \
+-it --rm -- sh
+
+Inside the pod:
+
+while true; do
+wget -q -O- http://two-tier-app-svc > /dev/null
+done
+
+Watched HPA:
+
+kubectl get hpa -w
+
+Watched pods:
+
+kubectl get pods -w
+
+Expected behavior:
+
+CPU usage increases
+↓
+Metrics Server detects CPU increase
+↓
+HPA scales pods
+↓
+Additional Flask pods are created
+
+After load stops:
+
+CPU usage decreases
+↓
+HPA waits
+↓
+Pods scale back down
+
+This validated HPA on EKS.
+
+====================================================================
+34. Final EKS Architecture
+====================================================================
+
+Final production-style architecture:
+
+Internet
+↓
+AWS ALB
+↓
+Ingress
+↓
+two-tier-app-svc (ClusterIP)
+↓
+Flask Pods
+
+↓
+
+mysql-svc
+↓
+
+MySQL Pod
+↓
+
+mysql-pvc
+↓
+
+AWS EBS Volume
+
+Supporting Components:
+
+EKS Cluster
+Worker Nodes
+AWS Load Balancer Controller
+EBS CSI Driver
+Metrics Server
+HPA
+ConfigMap
+Secret
+PVC
+ALB Target Group
+ALB Health Checks
+
+====================================================================
+35. Key Troubleshooting Performed
+====================================================================
+
+Issue 1:
+kubectl was pointing to K3s instead of EKS
+
+Fix:
+export KUBECONFIG=$HOME/.kube/config
+
+Issue 2:
+EKS API AccessDenied
+
+Fix:
+Attached custom eks:* policy to EKS-Admin-Role
+
+Issue 3:
+PVC stuck in Pending
+
+Fix:
+Installed EBS CSI driver
+
+Issue 4:
+EBS CSI controller CrashLoopBackOff
+
+Fix:
+Attached AmazonEC2FullAccess to the worker node IAM role
+
+Issue 5:
+Flask CrashLoopBackOff
+
+Fix:
+Added import time in app.py
+
+Issue 6:
+IngressClass traefik not found
+
+Fix:
+Changed ingressClassName from traefik to alb
+
+Issue 7:
+TargetGroup port empty
+
+Fix:
+Added alb.ingress.kubernetes.io/target-type: ip
+
+Issue 8:
+ALB returned HTTP 404
+
+Reason:
+Host header did not match Ingress host rule
+
+Fix:
+Remove host condition or send correct Host header
+
+====================================================================
+36. Commands Used Frequently
+====================================================================
+
+Check cluster:
+
+kubectl get nodes
+
+Check pods:
+
+kubectl get pods -o wide
+
+Check services:
+
+kubectl get svc
+
+Check PVC:
+
+kubectl get pvc
+
+Describe PVC:
+
+kubectl describe pvc mysql-pvc
+
+Check CSI drivers:
+
+kubectl get csidriver
+
+Check EBS CSI pods:
+
+kubectl get pods -n kube-system | grep ebs
+
+Check ingress:
+
+kubectl get ingress
+
+Describe ingress:
+
+kubectl describe ingress two-tier-app-ingress
+
+Check ALB controller:
+
+kubectl get deployment -n kube-system aws-load-balancer-controller
+
+Check load balancer:
+
+aws elbv2 describe-load-balancers --region ap-southeast-2
+
+Check target groups:
+
+aws elbv2 describe-target-groups --region ap-southeast-2
+
+Check target health:
+
+aws elbv2 describe-target-health --target-group-arn <target-group-arn>
+
+Check HPA:
+
+kubectl get hpa
+
+Check metrics:
+
+kubectl top pods
+
+kubectl top nodes
+
+====================================================================
+37. Concepts Covered Today
+====================================================================
+
+Amazon EKS
+eksctl
+AWS CLI
+EC2 IAM Role
+EKS IAM Permissions
+Custom IAM Policy
+Kubeconfig Context
+Worker Nodes
+EKS Managed Kubernetes
+StorageClass
+EBS CSI Driver
+OIDC Provider
+Worker Node IAM Role
+Dynamic EBS Provisioning
+PVC Binding
+MySQL on EBS
+Flask Application on EKS
+Service LoadBalancer
+AWS ELB
+AWS Load Balancer Controller
+Helm Installation
+ALB Ingress
+IngressClass alb
+ALB Target Type ip
+ClusterIP with ALB Ingress
+Target Groups
+Target Health Checks
+HPA on EKS
+Metrics Server
+Application Troubleshooting
+Kubernetes and AWS Integration
+
+====================================================================
+38. Today's Major Achievement
+====================================================================
+
+Today we successfully migrated the existing two-tier Flask + MySQL Kubernetes application from a local K3s environment to Amazon EKS.
+
+We created a real EKS cluster, connected kubectl to it, configured IAM permissions, solved EBS storage provisioning issues, deployed MySQL with EBS-backed persistent storage, deployed Flask application pods, exposed the application using both LoadBalancer service and ALB Ingress, validated AWS target groups and health checks, and tested autoscaling using HPA.
+
+This represents a production-style EKS architecture using:
+
+EKS
+EBS
+ALB
+Ingress
+HPA
+ConfigMap
+Secret
+PVC
+AWS Load Balancer Controller
+
+====================================================================
+39. Final Completed Checklist
+====================================================================
+
+✅ AWS CLI Installed
+✅ eksctl Installed
+✅ IAM Role Attached to EC2
+✅ EKS Permissions Fixed
+✅ EKS Cluster Created
+✅ kubectl Connected to EKS
+✅ Worker Nodes Ready
+✅ StorageClass Verified
+✅ EBS CSI Driver Installed
+✅ OIDC Provider Created
+✅ Worker Node IAM Permissions Fixed
+✅ PVC Bound
+✅ EBS Volume Created
+✅ MySQL Running
+✅ Flask App Running
+✅ LoadBalancer Service Tested
+✅ AWS Load Balancer Controller Installed
+✅ ALB Ingress Created
+✅ Target Group Created
+✅ Pod IP Targets Registered
+✅ Targets Healthy
+✅ HPA Tested
+✅ End-to-End EKS Application Deployment Completed
+
+====================================================================
+40. ECR
+====================================================================
+
+Amazon ECR (Elastic Container Registry) – Complete Notes
+
+1. Objective
+
+The objective of this activity was to learn Amazon Elastic Container Registry (ECR) and integrate it with Amazon EKS.
+
+Amazon ECR is AWS's fully managed private container registry used to store, manage, version, and deploy Docker container images.
+
+Target Architecture:
+
+Docker Build
+↓
+Amazon ECR
+↓
+Amazon EKS
+↓
+Pods
+
+====================================================================
+
+2. Why Amazon ECR?
+
+Before ECR:
+
+Developer
+↓
+Docker Hub
+↓
+Amazon EKS
+
+After ECR:
+
+Developer
+↓
+Amazon ECR
+↓
+Amazon EKS
+
+Benefits:
+
+- Fully managed AWS service
+- Private image registry
+- IAM-based authentication
+- Native integration with EKS
+- No Docker Hub rate limits
+- Image versioning support
+- Lifecycle policy support
+- Improved security
+
+====================================================================
+
+3. Initial Access Issue
+
+Command:
+
+aws ecr describe-repositories \
+--region ap-southeast-2
+
+Error:
+
+AccessDeniedException
+
+User:
+EKS-Admin-Role
+
+is not authorized to perform:
+
+ecr:DescribeRepositories
+
+Root Cause:
+
+The EKS-Admin-Role had EKS permissions but did not have ECR permissions.
+
+====================================================================
+
+4. Fix ECR Permission Issue
+
+IAM Role:
+
+EKS-Admin-Role
+
+Policy Attached:
+
+AmazonEC2ContainerRegistryFullAccess
+
+Purpose:
+
+Provides permissions for:
+
+- Create repository
+- Describe repositories
+- Authenticate to ECR
+- Push images
+- Pull images
+- Manage image metadata
+
+After attaching the policy, ECR commands started working successfully.
+
+====================================================================
+
+5. Docker Verification
+
+Checked Docker installation:
+
+docker images
+
+docker ps
+
+Docker was successfully installed and operational.
+
+====================================================================
+
+6. Authenticate Docker with ECR
+
+Command:
+
+aws ecr get-login-password \
+--region ap-southeast-2 \
+| docker login \
+--username AWS \
+--password-stdin \
+617292774228.dkr.ecr.ap-southeast-2.amazonaws.com
+
+Output:
+
+Login Succeeded
+
+Learning:
+
+ECR authentication uses:
+
+AWS IAM
+↓
+Temporary Authentication Token
+↓
+Docker Login
+↓
+ECR Access
+
+Unlike Docker Hub which uses username and password authentication.
+
+====================================================================
+
+7. Create ECR Repository
+
+Command:
+
+aws ecr create-repository \
+--repository-name two-tier-app \
+--region ap-southeast-2
+
+Repository Name:
+
+two-tier-app
+
+Repository URI:
+
+617292774228.dkr.ecr.ap-southeast-2.amazonaws.com/two-tier-app
+
+Repository Structure:
+
+AWS Account
+↓
+ECR Registry
+↓
+Repository
+↓
+Image Tags
+
+====================================================================
+
+8. Push Application Image to ECR
+
+Image Source:
+
+Existing Flask application image
+
+Workflow:
+
+Docker Image
+↓
+Tag Image
+↓
+Push to ECR
+↓
+Store in AWS Registry
+
+Typical Commands:
+
+docker tag SOURCE_IMAGE \
+617292774228.dkr.ecr.ap-southeast-2.amazonaws.com/two-tier-app:latest
+
+docker push \
+617292774228.dkr.ecr.ap-southeast-2.amazonaws.com/two-tier-app:latest
+
+Result:
+
+Application image successfully stored in Amazon ECR.
+
+====================================================================
+
+9. ECR Concepts Learned
+
+Registry
+
+Every AWS account automatically gets an ECR registry.
+
+Example:
+
+617292774228.dkr.ecr.ap-southeast-2.amazonaws.com
+
+------------------------------------------------------------
+
+Repository
+
+Logical location where images are stored.
+
+Example:
+
+two-tier-app
+
+------------------------------------------------------------
+
+Image Tag
+
+Used to identify image versions.
+
+Examples:
+
+latest
+v1
+v2
+v1.0.0
+
+------------------------------------------------------------
+
+Image Digest
+
+Unique SHA256 identifier.
+
+Example:
+
+sha256:xxxxxxxxxxxxxxxx
+
+====================================================================
+
+10. Integrating ECR with EKS
+
+Previous Deployment:
+
+image: maheshshillare/two-tier-flask-app:latest
+
+New Deployment:
+
+image: 617292774228.dkr.ecr.ap-southeast-2.amazonaws.com/two-tier-app:latest
+
+Deployment Flow:
+
+Deployment
+↓
+Pod Creation
+↓
+Node Pulls Image
+↓
+Amazon ECR
+↓
+Container Startup
+
+====================================================================
+
+11. ECR Security Model
+
+Authentication:
+
+AWS IAM
+
+Authorization:
+
+IAM Policies
+
+Examples:
+
+ecr:GetAuthorizationToken
+ecr:DescribeRepositories
+ecr:BatchGetImage
+ecr:PutImage
+ecr:ListImages
+
+Benefits:
+
+- Centralized AWS access control
+- No hardcoded credentials
+- Secure container image management
+
+====================================================================
+
+12. Image Versioning Strategy
+
+Instead of using only:
+
+latest
+
+Recommended:
+
+v1.0.0
+v1.0.1
+v1.1.0
+v2.0.0
+
+Benefits:
+
+- Easy rollback
+- Traceability
+- Controlled deployment promotions
+
+Example:
+
+Build Image
+↓
+Push v1.0.0
+↓
+Deploy
+↓
+Rollback if needed
+
+====================================================================
+
+13. ECR Lifecycle Policies
+
+Purpose:
+
+Automatically delete old images.
+
+Example Policy:
+
+Keep latest 10 images
+
+Delete older unused images
+
+Benefits:
+
+- Lower storage cost
+- Cleaner repositories
+- Better image management
+
+====================================================================
+
+14. Final Architecture After ECR
+
+Developer
+↓
+
+Docker Build
+↓
+
+Amazon ECR
+↓
+
+Amazon EKS
+↓
+
+AWS ALB
+↓
+
+Ingress
+↓
+
+ClusterIP Service
+↓
+
+Flask Pods
+↓
+
+MySQL Service
+↓
+
+MySQL Pod
+↓
+
+PVC
+↓
+
+AWS EBS Volume
+
+====================================================================
+
+15. Commands Used During ECR Learning
+
+Authenticate Docker:
+
+aws ecr get-login-password \
+--region ap-southeast-2 \
+| docker login \
+--username AWS \
+--password-stdin \
+617292774228.dkr.ecr.ap-southeast-2.amazonaws.com
+
+------------------------------------------------------------
+
+Create Repository:
+
+aws ecr create-repository \
+--repository-name two-tier-app \
+--region ap-southeast-2
+
+------------------------------------------------------------
+
+List Repositories:
+
+aws ecr describe-repositories \
+--region ap-southeast-2
+
+------------------------------------------------------------
+
+List Images:
+
+aws ecr list-images \
+--repository-name two-tier-app \
+--region ap-southeast-2
+
+------------------------------------------------------------
+
+Tag Image:
+
+docker tag SOURCE_IMAGE ECR_IMAGE
+
+------------------------------------------------------------
+
+Push Image:
+
+docker push ECR_IMAGE
+
+====================================================================
+
+16. Key Learnings
+
+✅ Amazon ECR Fundamentals
+
+✅ IAM-Based Authentication
+
+✅ ECR Repository Creation
+
+✅ Docker Authentication to ECR
+
+✅ Image Tagging
+
+✅ Image Versioning
+
+✅ ECR Image Push
+
+✅ EKS Integration with ECR
+
+✅ Registry and Repository Concepts
+
+✅ Lifecycle Policies Overview
+
+✅ AWS Native Container Registry
+
+====================================================================
+
+17. Updated Learning Roadmap
+
+✅ Amazon EKS
+✅ EBS CSI Driver
+✅ Dynamic EBS Provisioning
+✅ AWS Load Balancer Controller
+✅ ALB Ingress
+✅ HPA
+✅ Amazon ECR
+
+⬜ GitHub Actions
+⬜ Helm Charts
+⬜ Prometheus
+⬜ Grafana
+
+Recommended Next Topic:
+
+GitHub Actions CI/CD
+
+Future Production Pipeline:
+
+GitHub Commit
+↓
+GitHub Actions
+↓
+Docker Build
+↓
+Amazon ECR
+↓
+Amazon EKS Deployment
+↓
+Application Release
+
+====================================================================
+
+Summary
+
+Successfully learned Amazon ECR, resolved IAM permission issues, authenticated Docker with ECR, created an ECR repository, pushed the application image to ECR, and prepared EKS to use AWS-native container images instead of Docker Hub. This completes the container registry portion of the production-grade EKS platform.
+
+
+
