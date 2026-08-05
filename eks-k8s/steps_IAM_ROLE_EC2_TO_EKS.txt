@@ -1,0 +1,177 @@
+Goal:
+Allow an EC2 instance to manage AWS resources (EKS, EC2, IAM, etc.) without using AWS Access Keys.
+
+Architecture:
+
+EC2 Instance
+     ↓
+IAM Role
+     ↓
+Temporary AWS Credentials
+     ↓
+AWS CLI / eksctl
+     ↓
+AWS APIs
+     ↓
+EKS Cluster
+
+==================================================================
+STEP 1 - CREATE IAM ROLE
+==================================================================
+
+AWS Console
+→ IAM
+→ Roles
+→ Create Role
+
+Trusted Entity Type:
+AWS Service
+
+Use Case:
+EC2
+
+Click:
+Next
+
+==================================================================
+STEP 2 - ATTACH PERMISSIONS
+==================================================================
+
+For EKS Lab/Learning Purpose attach:
+
+AmazonEKSClusterPolicy
+AmazonEKSServicePolicy
+AmazonEC2FullAccess
+IAMFullAccess
+
+Role Name:
+
+EKS-Admin-Role
+
+Click:
+Create Role
+
+(Better Security)
+
+Instead of full admin, create a customer-managed policy such as:
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "eks:*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+
+Attach it to:
+
+EKS-Admin-Role
+
+==================================================================
+STEP 3 - ATTACH ROLE TO EC2
+==================================================================
+
+AWS Console
+→ EC2
+→ Instances
+→ Select EC2 Instance
+
+Actions
+→ Security
+→ Modify IAM Role
+
+Select:
+
+EKS-Admin-Role
+
+Save
+
+(No reboot required)
+
+Wait 30-60 seconds.
+
+==================================================================
+STEP 4 - VERIFY ROLE ATTACHED
+==================================================================
+
+Run:
+
+curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
+
+Expected:
+
+EKS-Admin-Role
+
+If empty:
+Role is not attached.
+
+==================================================================
+STEP 5 - INSTALL AWS CLI & EKSCTL
+==================================================================
+
+aws --version
+
+eksctl version
+
+Both commands should work.
+
+==================================================================
+STEP 6 - VERIFY AWS AUTHENTICATION
+==================================================================
+
+Run:
+
+aws sts get-caller-identity
+
+Expected:
+
+{
+  "Account": "123456789012",
+  "Arn": "arn:aws:sts::123456789012:assumed-role/EKS-Admin-Role/i-xxxxxxxx",
+  "UserId": "..."
+}
+
+If successful:
+
+IAM Role           ✅
+AWS CLI            ✅
+AWS Authentication ✅
+
+==================================================================
+STEP 7 - CREATE EKS CLUSTER
+==================================================================
+
+eksctl create cluster \
+  --name mahesh-eks \
+  --region ap-southeast-2 \
+  --nodes 2 \
+  --node-type t3.medium
+
+==================================================================
+TROUBLESHOOTING
+==================================================================
+
+Check attached role:
+
+curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
+
+Check AWS identity:
+
+aws sts get-caller-identity
+
+Common Errors:
+
+"Unable to locate credentials"
+→ AWS CLI not configured OR IAM role not attached
+
+"AccessDenied"
+→ IAM Role missing required permissions
+
+"no EC2 IMDS role found"
+→ No IAM Role attached to EC2
+

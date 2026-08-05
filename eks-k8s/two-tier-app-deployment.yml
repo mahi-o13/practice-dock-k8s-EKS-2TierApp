@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: two-tier-app
+  labels:
+    app: two-tier-app
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: two-tier-app
+
+  template:
+    metadata:
+      labels:
+        app: two-tier-app
+
+    spec:
+      containers:
+        - name: two-tier-app
+          image: 617292774228.dkr.ecr.ap-southeast-2.amazonaws.com/two-tier-app:latest
+
+          env:
+            - name: MYSQL_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: mysql-config
+                  key: MYSQL_HOST
+
+            - name: MYSQL_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: mysql-config
+                  key: MYSQL_DB
+
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_USER
+
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD                
+
+          ports:
+            - containerPort: 5000
+
+          imagePullPolicy: Always
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            failureThreshold: 30
+            periodSeconds: 5  
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi" 
+
+            limits:
+              cpu: "500m"
+              memory: "512Mi" 
